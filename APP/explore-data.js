@@ -1,12 +1,12 @@
 export const CHECKED_AT='2026-11-13';
 const cc=(file,author,work,version='4.0',caption='景點實景；歷史照片，非即時影像')=>({file,author,source:'https://commons.wikimedia.org/wiki/File:'+work,license:'CC BY-SA '+version,licenseUrl:'https://creativecommons.org/licenses/by-sa/'+version+'/',caption});
 export const photoCredits={
- shennong:cc('/assets/tainan-shennong.jpg','Andrzej Otrębski','Tainan_Shennong_St_1.jpg'),
- sunset:cc('/assets/explore/sunset-platform.jpg','ScoutT7','Sunset_Platform.jpg'),
- dadaocheng:cc('/assets/explore/dadaocheng.jpg','迷惘的人生','Dadaocheng_Wharf_container_market_2022.jpg','2.0','大稻埕碼頭貨櫃市集實景；2022 年照片'),
- calligraphy:cc('/assets/explore/calligraphy.jpg','Dquai','Calligraphy_Greenway_with_Park_Lane_by_CMP.jpg','4.0','草悟道與勤美誠品綠園道周邊實景；非即時影像'),
- pier2:cc('/assets/explore/pier2.jpg','NR','Dusk_at_Pier_2_001.jpg','4.0','駁二港邊實景；歷史照片，非即時影像'),
- qixingtan:cc('/assets/explore/qixingtan.jpg','Mamtapawar512','QIXINGTAN_beach_taiwan.jpg','4.0','七星潭海灘實景；2019 年照片')
+ shennong:cc('./assets/tainan-shennong.jpg','Andrzej Otrębski','Tainan_Shennong_St_1.jpg'),
+ sunset:cc('./assets/explore/sunset-platform.jpg','ScoutT7','Sunset_Platform.jpg'),
+ dadaocheng:cc('./assets/explore/dadaocheng.jpg','迷惘的人生','Dadaocheng_Wharf_container_market_2022.jpg','2.0','大稻埕碼頭貨櫃市集實景；2022 年照片'),
+ calligraphy:cc('./assets/explore/calligraphy.jpg','Dquai','Calligraphy_Greenway_with_Park_Lane_by_CMP.jpg','4.0','草悟道與勤美誠品綠園道周邊實景；非即時影像'),
+ pier2:cc('./assets/explore/pier2.jpg','NR','Dusk_at_Pier_2_001.jpg','4.0','駁二港邊實景；歷史照片，非即時影像'),
+ qixingtan:cc('./assets/explore/qixingtan.jpg','Mamtapawar512','QIXINGTAN_beach_taiwan.jpg','4.0','七星潭海灘實景；2019 年照片')
 };
 const classic=(id,name,city,district,desc,key,source,sourceName,x,y,extra={})=>({id,name,city,district,type:'景點',desc,photo:photoCredits[key].file,photoCredit:photoCredits[key],source,sourceName,checkedAt:CHECKED_AT,collection:'classic',basis:'官方觀光推薦・非即時人氣排名',x,y,...extra});
 const event=(id,name,city,district,start,end,desc,source,sourceName,x,y,extra={})=>({id,name,city,district,type:'活動',start,end,desc,source,sourceName,checkedAt:CHECKED_AT,collection:'recent',photo:'',basis:'官方活動公告・非即時人氣排名',x,y,...extra});

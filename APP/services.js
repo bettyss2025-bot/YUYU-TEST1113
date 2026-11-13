@@ -3,7 +3,7 @@ import {places} from './data.js';
 // when real collaboration is enabled. No remote account or API key is used here.
 export const repository={
  key:'roam-taiwan-v1',
- read(){const raw=localStorage.getItem(this.key);if(!raw)return null;const state=JSON.parse(raw);for(const trip of state.trips||[]){if(trip.cities?.includes('台南')&&trip.cover?.includes('photo-1470004914212-05527e49370b'))trip.cover='/assets/tainan-shennong.jpg';}return state;},
+ read(){const raw=localStorage.getItem(this.key);if(!raw)return null;const state=JSON.parse(raw);for(const trip of state.trips||[]){if(trip.cities?.includes('台南')&&trip.cover?.includes('photo-1470004914212-05527e49370b'))trip.cover='./assets/tainan-shennong.jpg';}return state;},
  write(state){localStorage.setItem(this.key,JSON.stringify(state));}
 };
 export const explorationSource={list(trip){return [...places,...(trip?.customPlaces||[])];}};
