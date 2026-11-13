@@ -1,0 +1,24 @@
+{
+  "id": "/",
+  "name": "旅伴 roam・台灣旅遊手帳",
+  "short_name": "旅伴 roam",
+  "description": "安排台灣旅行、收藏地點，與旅伴一起記帳分帳。資料目前保存在本機。",
+  "lang": "zh-Hant-TW",
+  "start_url": "/#trip",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f6f5ef",
+  "theme_color": "#234c3c",
+  "categories": ["travel", "lifestyle"],
+  "icons": [
+    {"src":"/assets/app-icon-192.png","sizes":"192x192","type":"image/png","purpose":"any"},
+    {"src":"/assets/app-icon-512.png","sizes":"512x512","type":"image/png","purpose":"any"},
+    {"src":"/assets/app-icon-maskable.png","sizes":"512x512","type":"image/png","purpose":"maskable"}
+  ],
+  "shortcuts": [
+    {"name":"安排行程","url":"/#itinerary"},
+    {"name":"旅程記帳","url":"/#ledger"},
+    {"name":"查看分帳","url":"/#split"}
+  ]
+}
