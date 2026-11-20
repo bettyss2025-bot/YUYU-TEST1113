@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<style>
+  :root { color-scheme: light; --ink:#234c3c; --paper:#f5f5ed; --muted:#53665b; --line:#d8e1d7; --white:#fffef9; }
+  * { box-sizing:border-box; }
+  body { margin:0; color:var(--ink); background:var(--paper); font:16px/1.55 system-ui,sans-serif; }
+  header { border-bottom:1px solid var(--line); background:var(--white); }
+  header div, main { width:min(calc(100% - 32px), 820px); margin:auto; }
+  header div { display:flex; align-items:center; justify-content:space-between; min-height:64px; }
+  .brand { font:bold 25px Georgia,serif; letter-spacing:2px; }
+  .brand em { font-size:21px; font-weight:normal; letter-spacing:0; margin-left:6px; }
+  main { padding:24px 0 60px; }
+  .hero { background:var(--ink); color:white; border-radius:18px; padding:clamp(20px,6vw,48px); overflow-wrap:anywhere; }
+  h1,h2,h3,p { margin:0; }
+  h1 { font-size:clamp(26px,6vw,42px); line-height:1.2; margin-bottom:8px; }
+  h2 { font-size:22px; }
+  h3 { font-size:16px; }
+  nav, .actions, .heading { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+  nav { margin:16px 0; }
+  .heading { justify-content:space-between; }
+  button,input,select,textarea { font:inherit; }
+  button { background:var(--white); color:var(--ink); border:1px solid var(--line); border-radius:8px; cursor:pointer; min-height:44px; padding:6px 13px; }
+  button.primary, nav button[aria-current] { background:var(--ink); color:white; border-color:var(--ink); }
+  button.danger, .error { color:#972e27; }
+  button:disabled { opacity:.60; cursor:wait; }
+  section { margin-bottom:16px; }
+  .panel { padding:16px; border:1px solid var(--line); background:var(--white); border-radius:12px; }
+  .panel > * + * { margin-top:12px; }
+  .entry { display:flex; align-items:center; justify-content:space-between; gap:10px; padding-top:12px; border-top:1px solid var(--line); }
+  .entry > div:first-child { min-width:0; overflow-wrap:anywhere; }
+  .entry p { white-space:pre-wrap; }
+  .muted, output { color:var(--muted); font-size:.9rem; }
+  .total { font-size:1.35rem; font-weight:bold; font-variant-numeric:tabular-nums; }
+  .date-group { margin-top:18px; }
+  .date-group .entry { margin-top:8px; }
+  dialog { width:min(calc(100% - 24px),480px); max-height:90dvh; border:1px solid var(--line); border-radius:16px; color:var(--ink); background:var(--white); padding:18px; }
+  dialog::backdrop { background:#142d23a6; }
+  form,label { display:grid; gap:6px; }
+  form { gap:12px; margin-top:14px; }
+  input,select,textarea { min-height:44px; max-width:100%; width:100%; border:1px solid #9bada0; border-radius:8px; background:white; padding:7px 10px; color:var(--ink); }
+  textarea { min-height:80px; resize:vertical; }
+  .date-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,160px),1fr)); gap:10px; }
+  .copy { display:block; width:100%; }
+  #status { display:block; margin-top:12px; }
+  :focus-visible { outline:2px solid #a4532e; outline-offset:2px; }
+</style>
+</head>
+<body>
+<header><div><span class="brand">旅伴<em>roam</em></span><button id="refresh" hidden>重新讀取</button></div></header>
+<main>
+  <div id="content"><p>正在開啟旅程…</p></div>
+  <output id="status" aria-live="polite"></output>
+</main>
+<dialog id="editor" aria-labelledby="dialog-title"></dialog>
+<script>
+  'use strict';
+  const content = document.getElementById('content');
+  const status = document.getElementById('status');
+  const editor = document.getElementById('editor');
+  const refresh = document.getElementById('refresh');
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  const money = value => new Intl.NumberFormat('zh-TW', {style:'currency', currency:'TWD', maximumFractionDigits:2}).format(value / 100);
+  const cents = amount => Math.round((Number(amount) || 0) * 100);
+  const today = () => new Intl.DateTimeFormat('sv-SE', {timeZone:'Asia/Taipei'}).format(new Date());
+  const labels = {members:'旅伴', plans:'行程', expenses:'支出'};
+  let key = '', organizer = false, snapshot, tab = 'plans', busy = false, submitEditor;
+  const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('');
+
+  function request(action, fields = {}) {
+    return new Promise((resolve, reject) => {
+      google.script.run.withFailureHandler(() => reject(new Error('無法連線，請稍後重試。')))
+        .withSuccessHandler(result => result.error ? reject(new Error(result.error)) : resolve(result.data))
+        .roamRequest({action, key, ...fields});
+    });
+  }
+
+  function notify(message, error = false) {
+    const target = editor.open ? editor.querySelector('.error') : status;
+    target.textContent = message;
+    target.classList.toggle('error', error || target !== status);
+  }
+
+  async function run(callback) {
+    if (busy) return;
+    busy = true;
+    document.querySelectorAll('button:not(:disabled)').forEach(button => {
+      button.dataset.pending = '1';
+      button.disabled = true;
+    });
+    try {
+      notify('');
+      await callback();
+    } catch (error) {
+      notify(error.message, true);
+    } finally {
+      document.querySelectorAll('[data-pending]').forEach(button => {
+        button.disabled = false;
+        delete button.dataset.pending;
+      });
+      busy = false;
+    }
+  }
+
+  function denied(message) {
+    snapshot = null;
+    content.innerHTML = '<section class="panel"><h1>無法開啟旅程</h1><p>' + esc(message) + '</p></section>';
+  }
+
+  async function load() {
+    if (!key) {
+      denied('請使用主辦人提供的有效私人邀請連結。');
+      return;
+    }
+    try {
+      snapshot = await request(organizer ? 'organizer' : 'read');
+      render();
+    } catch (error) {
+      if (editor.open) editor.close();
+      denied(error.message);
+    }
+  }
+
+  function render() {
+    if (organizer) {
+      content.innerHTML = `<section class="hero"><h1>主辦人管理</h1><p>建立旅程並管理私人邀請連結</p></section>
+        <section class="panel"><div class="heading"><h2>旅程</h2><button class="primary" data-action="new-trip">建立旅程</button></div>
+        ${snapshot.trips.map(trip => `<article class="entry"><div><h3>${esc(trip.name)}</h3><p class="muted">${esc(trip.start)} 至 ${esc(trip.end)} · ${trip.active ? '邀請有效' : '無有效邀請'}</p></div>
+          <div class="actions"><button data-action="invite" data-id="${esc(trip.id)}">${trip.active ? '取得邀請' : '建立邀請'}</button>
+          ${trip.active ? `<button class="danger" data-action="revoke" data-id="${esc(trip.id)}">撤銷</button>` : ''}</div></article>`).join('') || '<p class="muted">目前沒有旅程。</p>'}</section>`;
+      return;
+    }
+    const {trip} = snapshot;
+    content.innerHTML = `<section class="hero"><h1>${esc(trip.name)}</h1><p>${esc(trip.start)} 至 ${esc(trip.end)}</p></section>
+      <nav aria-label="旅程功能">${Object.entries(labels).map(([id, name]) =>
+        `<button data-tab="${id}" ${id === tab ? 'aria-current="page"' : ''}>${name}</button>`).join('')}
+        <button data-action="edit-trip">旅程日期</button></nav>${renderTab()}`;
+  }
+
+  function renderTab() {
+    const records = snapshot[tab];
+    const button = `<button class="primary" data-action="add" ${tab === 'expenses' && !snapshot.members.length ? 'disabled' : ''}>新增${labels[tab]}</button>`;
+    let rows = records.map(entry).join('');
+    if (tab !== 'members') {
+      const grouped = new Map();
+      const sorted = [...records].sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''));
+      for (const item of sorted) {
+        if (!grouped.has(item.date)) grouped.set(item.date, []);
+        grouped.get(item.date).push(item);
+      }
+      rows = [...grouped].map(([date, items]) => `<div class="date-group"><h3>${esc(date)}</h3>${items.map(entry).join('')}</div>`).join('');
+    }
+    const empty = tab === 'expenses' && !snapshot.members.length ? '請先新增旅伴，再登記支出。' : '目前沒有' + labels[tab] + '。';
+    return `<section class="panel"><div class="heading"><h2>${labels[tab]}</h2>${button}</div>
+      ${tab === 'expenses' ? totals(records) : ''}${rows || `<p class="muted">${empty}</p>`}</section>`;
+  }
+
+  function totals(records) {
+    const paid = new Map(snapshot.members.map(member => [member.id, {name:member.name, value:0}]));
+    let total = 0;
+    for (const record of records) {
+      const value = cents(record.amount);
+      total += value;
+      if (!paid.has(record.payer)) paid.set(record.payer, {name:'未對應旅伴', value:0});
+      paid.get(record.payer).value += value;
+    }
+    return `<div class="entry"><b>旅程支出總額</b><span class="total">${money(total)}</span></div>
+      ${[...paid.values()].map(({name,value}) => `<div class="entry"><span>${esc(name)}代墊</span><b>${money(value)}</b></div>`).join('')}`;
+  }
+
+  function entry(item) {
+    const details = tab === 'plans' ? [item.time, item.place] : tab === 'expenses'
+      ? [snapshot.members.find(member => member.id === item.payer)?.name || '未對應旅伴', money(cents(item.amount))] : [];
+    return `<article class="entry"><div><h3>${esc(item.name || item.title)}</h3>
+      ${details.filter(Boolean).length ? `<p class="muted">${details.filter(Boolean).map(esc).join(' · ')}</p>` : ''}
+      ${item.note ? `<p>${esc(item.note)}</p>` : ''}</div>
+      <button data-action="edit" data-id="${esc(item.id)}">編輯<span hidden>${esc(item.name || item.title)}</span></button></article>`;
+  }
+
+  function field(label, name, value, attributes = '') {
+    return `<label>${label}<input name="${name}" value="${esc(value)}" ${attributes}></label>`;
+  }
+
+  function show(title, body) {
+    editor.innerHTML = `<div class="heading"><h2 id="dialog-title">${esc(title)}</h2><button type="button" data-action="close" aria-label="關閉">關閉</button></div>${body}<p class="error" role="alert"></p>`;
+    if (!editor.open) editor.showModal();
+  }
+
+  function form(title, fields, save, canDelete = false) {
+    submitEditor = save;
+    show(title, `<form id="editor-form">${fields}<div class="actions"><button type="submit" class="primary">儲存</button>
+      ${canDelete ? '<button type="button" class="danger" data-action="delete">刪除</button>' : ''}</div></form>`);
+  }
+
+  function confirmAction(title, message, callback) {
+    submitEditor = callback;
+    show(title, `<form><p>${esc(message)}</p><button type="submit" class="danger">確認</button></form>`);
+  }
+
+  function tripForm(create) {
+    const trip = create ? {} : snapshot.trip;
+    const draftId = create ? newId() : '';
+    form(create ? '建立旅程' : '設定旅程日期', field('旅程名稱', 'name', trip.name, 'required maxlength="80"') +
+      '<div class="date-fields">' + field('開始日期', 'start', trip.start || today(), 'required type="date"') +
+      field('結束日期', 'end', trip.end || today(), 'required type="date"') + '</div>',
+      async record => {
+        const result = await request(create ? 'createTrip' : 'updateTrip', {record, id:draftId, stamp:trip.stamp || ''});
+        if (create) {
+          snapshot = await request('organizer');
+          render();
+          editor.close();
+          notify('旅程已建立。請按「建立邀請」取得連結。');
+        } else {
+          snapshot = result;
+          editor.close();
+          render();
+        }
+      });
+  }
+
+  function recordForm(item = {}) {
+    const kind = tab;
+    const draftId = item.id ? '' : newId();
+    const isMember = kind === 'members';
+    const isPlan = kind === 'plans';
+    const defaultDate = today() < snapshot.trip.start || today() > snapshot.trip.end ? snapshot.trip.start : today();
+    const fields = isMember ? field('姓名', 'name', item.name, 'required maxlength="60"') :
+      field('名稱', 'title', item.title, 'required maxlength="120"') + '<div class="date-fields">' +
+      field('日期', 'date', item.date || defaultDate, 'type="date" required') +
+      (isPlan ? field('時間', 'time', item.time, 'type="time"') : field('金額（TWD）', 'amount', item.amount, 'type="number" required min="0.01" max="999999999.99" step="0.01"')) +
+      '</div>' + (isPlan ? field('地點', 'place', item.place, 'maxlength="200"') :
+        `<label>誰付款<select name="payer" required><option value="">選擇旅伴</option>${snapshot.members.map(member =>
+          `<option value="${esc(member.id)}" ${member.id === item.payer ? 'selected' : ''}>${esc(member.name)}</option>`).join('')}</select></label>`) +
+      `<label>備註<textarea name="note" maxlength="2000">${esc(item.note)}</textarea></label>`;
+    form((item.id ? '編輯' : '新增') + labels[kind], fields, async (record, action = 'save') => {
+      snapshot = await request(action, {kind, id:item.id || '', newId:draftId, stamp:item.stamp || '', record});
+      editor.close();
+      render();
+      notify(action === 'delete' ? '已刪除。' : '已儲存。');
+    }, Boolean(item.id));
+  }
+
+  async function showInvite(id) {
+    const result = await request('invite', {id});
+    snapshot = await request('organizer');
+    render();
+    show('私人邀請連結', `<p>持有連結的旅伴可以查看及編輯這趟旅程。</p>
+      <label>邀請網址<input class="copy" id="invite-link" readonly value="${esc(result.url)}"></label>
+      <div class="actions"><button data-action="copy">複製連結</button><a target="_blank" rel="noopener noreferrer" href="${esc(result.url)}">開啟旅程</a></div>`);
+  }
+
+  document.addEventListener('click', event => {
+    const button = event.target.closest('button');
+    if (!button || busy) return;
+    if (button.dataset.tab) {
+      tab = button.dataset.tab;
+      render();
+      return;
+    }
+    const {action, id} = button.dataset;
+    if (button === refresh) run(load);
+    if (action === 'close') editor.close();
+    if (action === 'new-trip') tripForm(true);
+    if (action === 'edit-trip') tripForm(false);
+    if (action === 'add') recordForm();
+    if (action === 'edit') recordForm(snapshot[tab].find(item => item.id === id));
+    if (action === 'delete') {
+      const remove = submitEditor;
+      confirmAction('刪除資料', '確定要刪除這筆資料？', () => remove({}, 'delete'));
+    }
+    if (action === 'invite') run(() => showInvite(id));
+    if (action === 'revoke') confirmAction('撤銷邀請', '撤銷後，現有邀請連結會立即失效。', async () => {
+      await request('revoke', {id});
+      editor.close();
+      await load();
+      notify('已撤銷邀請連結。');
+    });
+    if (action === 'copy') run(async () => {
+      const input = document.getElementById('invite-link');
+      try {
+        await navigator.clipboard.writeText(input.value);
+        notify('已複製連結。');
+      } catch {
+        input.focus();
+        input.select();
+        if (document.execCommand('copy')) notify('已複製連結。');
+        else notify('已選取連結，請使用瀏覽器的複製功能。');
+      }
+    });
+  });
+
+  editor.addEventListener('submit', event => {
+    event.preventDefault();
+    const record = Object.fromEntries(new FormData(event.target));
+    run(() => submitEditor(record));
+  });
+  editor.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+
+  google.script.url.getLocation(location => {
+    const params = new URLSearchParams(location.hash);
+    organizer = params.has('organizer');
+    key = params.get(organizer ? 'organizer' : 'invite') || '';
+    refresh.hidden = !key;
+    run(load);
+  });
+</script>
+</body>
+</html>
