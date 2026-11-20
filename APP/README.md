@@ -1,6 +1,8 @@
 # 旅伴 roam
 
-以台灣旅行為題的手機優先互動網頁原型。無需安裝套件、帳號或付費金鑰。
+旅伴 roam 有 Google Apps Script 共用版及 GitHub Pages 本機原型。共用版支援手機私密邀請、多人行程及記帳，資料儲存在指定的 Google 試算表。請見 [共用版部署與驗收](apps-script/README.md)。
+
+以下說明 GitHub Pages 本機原型。
 
 ## 啟動
 
