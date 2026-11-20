@@ -1,0 +1,383 @@
+<script>
+(() => {
+  'use strict';
+  const id = name => document.getElementById(name);
+  const dateFormat = new Intl.DateTimeFormat('zh-TW', {
+    timeZone: 'UTC', month: 'numeric', day: 'numeric', weekday: 'short'
+  });
+  const currency = new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD' });
+  const headings = { itinerary: '每日行程', expenses: '旅程記帳', members: '旅伴名單' };
+  const labels = { itinerary: '行程', expenses: '支出', members: '旅伴' };
+  let credentials = {};
+  let currentTrip = '';
+  let snapshot = null;
+  let view = 'itinerary';
+  let selectedDay = '';
+  let invitation = '';
+  let pending = false;
+  let editorSave;
+
+  function create(tag, value, className) {
+    const element = document.createElement(tag);
+    if (value !== undefined) element.textContent = value;
+    if (className) element.className = className;
+    return element;
+  }
+
+  function button(label, action, className = 'quiet') {
+    const element = create('button', label, className);
+    element.type = 'button';
+    element.onclick = action;
+    return element;
+  }
+
+  function randomId() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte =>
+      byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  function rpc(action, extra = {}) {
+    return new Promise((resolve, reject) => {
+      google.script.run.withSuccessHandler(response => {
+        if (response.ok) resolve(response);
+        else reject(Object.assign(new Error(response.message), { code: response.code }));
+      }).withFailureHandler(() => reject(new Error('連線失敗，請稍後重試。')))
+        .roamRpc({ ...credentials, tripId: currentTrip, action, ...extra });
+    });
+  }
+
+  function status(message = '', error = false) {
+    id('status').textContent = message;
+    id('status').classList.toggle('error', error);
+  }
+
+  function handle(error) {
+    if (['access', 'sharing'].includes(error.code)) {
+      snapshot = null;
+      invitation = '';
+      id('trip').hidden = true;
+      id('trips').hidden = true;
+      id('all-trips').hidden = true;
+      id('editor').close();
+    }
+    status(error.message, true);
+  }
+
+  async function run(task) {
+    if (pending) return;
+    pending = true;
+    id('refresh').disabled = true;
+    try {
+      status();
+      await task();
+    } catch (error) {
+      handle(error);
+    } finally {
+      pending = false;
+      id('refresh').disabled = false;
+    }
+  }
+
+  async function showTrips() {
+    const result = await rpc('list');
+    currentTrip = '';
+    snapshot = null;
+    invitation = '';
+    id('trip').hidden = true;
+    id('trips').hidden = false;
+    id('all-trips').hidden = true;
+    const list = id('trip-list');
+    list.replaceChildren();
+    for (const trip of result.trips) {
+      const card = create('article', undefined, 'row');
+      const info = create('div');
+      info.append(create('p', trip.name, 'title'), create('p', trip.start + ' ～ ' + trip.end, 'meta'));
+      card.append(info, button('開啟旅程', () => run(() => openTrip(trip.id))));
+      list.append(card);
+    }
+    if (!result.trips.length) list.append(create('p', '目前還沒有旅程。', 'empty'));
+  }
+
+  async function openTrip(tripId) {
+    const previousTrip = currentTrip;
+    currentTrip = tripId;
+    try {
+      snapshot = await rpc('get');
+    } catch (error) {
+      currentTrip = previousTrip;
+      throw error;
+    }
+    if (previousTrip !== tripId) {
+      view = 'itinerary';
+      selectedDay = '';
+      invitation = '';
+    }
+    id('trip-name').textContent = snapshot.trip.name;
+    id('trip-dates').textContent = snapshot.trip.start + ' ～ ' + snapshot.trip.end;
+    id('trips').hidden = true;
+    id('trip').hidden = false;
+    id('edit-trip').hidden = !snapshot.organizer;
+    id('all-trips').hidden = !snapshot.organizer;
+    id('invite-tab').hidden = !snapshot.organizer;
+    render();
+  }
+
+  function render() {
+    document.querySelectorAll('[data-view]').forEach(tab => {
+      tab.setAttribute('aria-pressed', String(tab.dataset.view === view));
+    });
+    id('records').hidden = view === 'invite';
+    id('invitations').hidden = view !== 'invite';
+    if (view === 'invite') {
+      const enabled = snapshot.trip.hasInvite;
+      id('invite-status').textContent = enabled ? '邀請連結目前有效。' : '目前沒有有效的邀請連結。';
+      id('new-invite').textContent = enabled ? '更換邀請連結' : '產生邀請連結';
+      id('revoke-invite').hidden = !enabled;
+      id('invite-output').hidden = !invitation;
+      id('invite-url').value = invitation;
+      return;
+    }
+    id('record-heading').textContent = headings[view];
+    id('add-record').textContent = '新增' + labels[view];
+    id('day-filter').hidden = view !== 'itinerary';
+    id('summary').replaceChildren();
+    let rows = [...snapshot[view]];
+    if (view === 'itinerary') {
+      renderDays();
+      rows = rows.filter(row => row.date === selectedDay)
+        .sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
+    }
+    if (view === 'expenses') {
+      renderSummary();
+      rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    }
+    const list = id('record-list');
+    list.replaceChildren(...rows.map(recordCard));
+    if (!rows.length) list.append(create('p', '目前還沒有' + labels[view] + '。', 'empty'));
+  }
+
+  function renderDays() {
+    const { start, end } = snapshot.trip;
+    const days = id('days');
+    days.replaceChildren();
+    const cursor = new Date(start + 'T00:00:00Z');
+    const finish = new Date(end + 'T00:00:00Z');
+    for (let i = 0; cursor <= finish && i < 366; i++, cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+      const option = create('option', dateFormat.format(cursor));
+      option.value = cursor.toISOString().slice(0, 10);
+      days.append(option);
+    }
+    days.value = selectedDay;
+    if (!days.value) days.value = start;
+    selectedDay = days.value;
+  }
+
+  function renderSummary() {
+    const totals = new Map(snapshot.members.map(member => [member.id, 0]));
+    let total = 0;
+    for (const expense of snapshot.expenses) {
+      const cents = Math.round(Number(expense.amount) * 100);
+      if (!Number.isSafeInteger(cents)) continue;
+      totals.set(expense.payer, (totals.get(expense.payer) || 0) + cents);
+      total += cents;
+    }
+    const breakdown = create('dl');
+    const addTotal = (label, amount) => {
+      const row = create('div');
+      row.append(create('dt', label), create('dd', currency.format(amount / 100)));
+      breakdown.append(row);
+    };
+    addTotal('旅程支出總額', total);
+    for (const [payer, amount] of totals) addTotal(payerName(payer) + '代墊', amount);
+    id('summary').append(breakdown);
+  }
+
+  function payerName(payer) {
+    return snapshot.members.find(member => member.id === payer)?.name || '未知旅伴';
+  }
+
+  function recordCard(record) {
+    const kind = view;
+    const card = create('article', undefined, 'row');
+    const text = create('div');
+    text.append(create('p', kind === 'members' ? record.name : record.title, 'title'));
+    if (kind === 'itinerary') {
+      text.append(create('p', [record.time || '時間未定', record.place].filter(Boolean).join(' · '), 'meta'));
+    }
+    if (kind === 'expenses') {
+      text.append(create('p', [record.date, payerName(record.payer), currency.format(record.amount)].join(' · '), 'meta'));
+    }
+    if (record.note) text.append(create('p', record.note, 'note'));
+    const actions = create('div', undefined, 'actions');
+    actions.append(button('編輯', () => editRecord(kind, record)),
+      button('刪除', () => confirmEditor('刪除' + labels[kind], '確定要刪除這筆' + labels[kind] + '？', async () => {
+        await rpc('delete', { kind, data: record });
+        await openTrip(currentTrip);
+      }), 'danger'));
+    card.append(text, actions);
+    return card;
+  }
+
+  function field(name, label, options = {}) {
+    const wrapper = create('label', label);
+    let control;
+    if (options.choices) {
+      control = create('select');
+      for (const [value, title] of options.choices) {
+        const option = create('option', title);
+        option.value = value;
+        control.append(option);
+      }
+    } else if (options.type === 'textarea') {
+      control = create('textarea');
+    } else {
+      control = create('input');
+      control.type = options.type || 'text';
+    }
+    control.name = name;
+    control.required = options.required || false;
+    if (options.maxLength) control.maxLength = options.maxLength;
+    if (options.min) control.min = options.min;
+    if (options.max) control.max = options.max;
+    if (options.step) control.step = options.step;
+    if (options.value !== undefined && options.value !== '') control.value = options.value;
+    wrapper.append(control);
+    return wrapper;
+  }
+
+  function showEditor(title, fields, save, saveLabel = '儲存') {
+    if (pending || id('editor').open) return;
+    id('editor-title').textContent = title;
+    id('editor-error').textContent = '';
+    id('fields').replaceChildren(...fields);
+    id('save-editor').textContent = saveLabel;
+    editorSave = save;
+    id('editor').showModal();
+  }
+
+  function confirmEditor(title, question, save) {
+    showEditor(title, [create('p', question)], save, '確認');
+  }
+
+  function tripEditor(trip) {
+    const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Taipei' }).format(new Date());
+    const data = trip || { id: randomId(), start: today, end: today };
+    showEditor(trip ? '編輯旅程' : '建立旅程', [
+      field('name', '旅程名稱', { value: data.name, required: true, maxLength: 160 }),
+      field('start', '開始日期', { type: 'date', value: data.start, required: true }),
+      field('end', '結束日期', { type: 'date', value: data.end, required: true })
+    ], async values => {
+      const result = await rpc(trip ? 'updateTrip' : 'create', { data: { ...data, ...values } });
+      await openTrip(result.id || currentTrip);
+    });
+  }
+
+  function editRecord(kind, record) {
+    if (kind === 'expenses' && !snapshot.members.length) {
+      status('請先新增至少一位旅伴，再記錄支出。', true);
+      return;
+    }
+    const data = record || { id: randomId(), date: selectedDay || snapshot.trip.start };
+    const date = field('date', '日期', { type: 'date', value: data.date, required: true,
+      min: kind === 'itinerary' ? snapshot.trip.start : '',
+      max: kind === 'itinerary' ? snapshot.trip.end : '' });
+    const title = field('title', '名稱', { value: data.title, required: true, maxLength: 160 });
+    const note = field('note', '備註', { type: 'textarea', value: data.note, maxLength: 2000 });
+    const fields = {
+      members: () => [field('name', '旅伴姓名', { value: data.name, required: true, maxLength: 80 })],
+      itinerary: () => [title, date, field('time', '時間', { type: 'time', value: data.time }),
+        field('place', '地點', { value: data.place, maxLength: 200 }), note],
+      expenses: () => [title, date,
+        field('payer', '誰付款', { choices: [['', '請選擇旅伴'],
+          ...snapshot.members.map(member => [member.id, member.name])], value: data.payer, required: true }),
+        field('amount', '金額（元）', { type: 'number', value: data.amount, required: true,
+          min: '0.01', max: '999999999.99', step: '0.01' }), note]
+    };
+    showEditor((record ? '編輯' : '新增') + labels[kind], fields[kind](), async values => {
+      await rpc('save', { kind, data: { ...data, ...values } });
+      if (kind === 'itinerary') selectedDay = values.date;
+      await openTrip(currentTrip);
+    });
+  }
+
+  async function updateInvitation(mode, nonce) {
+    const result = await rpc('invitation', { data: { mode, nonce: nonce || '' } });
+    invitation = result.url;
+    snapshot.trip.hasInvite = Boolean(invitation);
+    render();
+  }
+
+  id('refresh').onclick = () => run(async () => {
+    if (currentTrip) {
+      await openTrip(currentTrip);
+      if (view === 'invite') await updateInvitation('retrieve');
+    } else if (credentials.organizer) await showTrips();
+    else status('請使用主辦人提供的私人邀請連結。', true);
+  });
+  id('all-trips').onclick = () => run(showTrips);
+  id('new-trip').onclick = () => tripEditor();
+  id('edit-trip').onclick = () => tripEditor(snapshot.trip);
+  id('add-record').onclick = () => editRecord(view);
+  id('days').onchange = event => { selectedDay = event.target.value; render(); };
+  document.querySelectorAll('[data-view]').forEach(tab => {
+    tab.onclick = () => run(async () => {
+      view = tab.dataset.view;
+      render();
+      if (view === 'invite') await updateInvitation('retrieve');
+    });
+  });
+  id('new-invite').onclick = () => {
+    const nonce = randomId();
+    if (snapshot.trip.hasInvite) {
+      confirmEditor('更換邀請連結', '更換後，原本的連結會立即失效。', () => updateInvitation('rotate', nonce));
+    } else run(() => updateInvitation('rotate', nonce));
+  };
+  id('revoke-invite').onclick = () => confirmEditor('撤銷邀請連結', '撤銷後，原本的連結會立即失效。',
+    () => updateInvitation('revoke'));
+  id('copy-invite').onclick = async () => {
+    const input = id('invite-url');
+    input.focus();
+    input.select();
+    try {
+      if (!document.execCommand('copy')) await navigator.clipboard.writeText(input.value);
+      status('已複製邀請連結。');
+    } catch {
+      status('請長按已選取的邀請連結並複製。');
+    }
+  };
+  id('close-editor').onclick = () => { if (!pending) id('editor').close(); };
+  id('editor').oncancel = event => { if (pending) event.preventDefault(); };
+  id('editor-form').onsubmit = async event => {
+    event.preventDefault();
+    if (pending) return;
+    pending = true;
+    id('save-editor').disabled = true;
+    id('close-editor').disabled = true;
+    id('editor-error').textContent = '';
+    try {
+      await editorSave(Object.fromEntries(new FormData(event.currentTarget)));
+      id('editor').close();
+      status('已儲存。');
+    } catch (error) {
+      if (['access', 'sharing'].includes(error.code)) handle(error);
+      else id('editor-error').textContent = error.message;
+    } finally {
+      pending = false;
+      id('save-editor').disabled = false;
+      id('close-editor').disabled = false;
+    }
+  };
+
+  google.script.url.getLocation(location => {
+    const hash = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+    credentials = { organizer: hash.get('organizer') || '', invite: hash.get('invite') || '' };
+    currentTrip = hash.get('trip') || '';
+    if (!credentials.organizer && !(currentTrip && credentials.invite)) {
+      status('請使用主辦人提供的私人邀請連結。', true);
+      return;
+    }
+    id('refresh').hidden = false;
+    run(() => currentTrip ? openTrip(currentTrip) : showTrips());
+  });
+})();
+</script>
